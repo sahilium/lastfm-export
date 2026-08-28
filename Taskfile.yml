@@ -1,0 +1,86 @@
+version: "3"
+
+vars:
+  BINARY: musiclib
+  DB: musiclib.db
+
+tasks:
+  build:
+    desc: Build the production binary (frontend + backend)
+    cmds:
+      - cd web && bun run build
+      - go build -o {{.BINARY}} ./cmd/musiclib
+
+  build:frontend:
+    desc: Build frontend assets only
+    cmds:
+      - cd web && bun run build
+
+  build:backend:
+    desc: Build backend binary only
+    cmds:
+      - go build -o {{.BINARY}} ./cmd/musiclib
+
+  dev:
+    desc: Start the server (rebuild before)
+    deps: [build]
+    cmds:
+      - ./{{.BINARY}} serve
+
+  serve:
+    desc: Run the server without rebuilding
+    cmds:
+      - ./{{.BINARY}} serve
+
+  import:
+    desc: Import scrobbles from a source SQLite database
+    usage: task import -- nonominox.sqlite3
+    cmds:
+      - ./{{.BINARY}} import {{.CLI_ARGS}}
+
+  test:
+    desc: Run Go tests
+    cmds:
+      - go test ./...
+
+  test:verbose:
+    desc: Run Go tests with verbose output
+    cmds:
+      - go test -v ./...
+
+  lint:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  stats:
+    desc: Show library statistics
+    cmds:
+      - ./{{.BINARY}} stats
+
+  fts:
+    desc: Rebuild full-text search indexes
+    cmds:
+      - ./{{.BINARY}} fts
+
+  migrate:
+    desc: Run database migrations
+    cmds:
+      - ./{{.BINARY}} migrate
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -f {{.BINARY}}
+      - rm -rf web/dist
+
+  frontend:dev:
+    desc: Start frontend dev server with hot reload
+    cmds:
+      - cd web && bun run dev
+
+  setup:
+    desc: Install all dependencies
+    cmds:
+      - go mod download
+      - cd web && bun install
