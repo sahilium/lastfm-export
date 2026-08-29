@@ -1,19 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api, Artist } from '../lib/api';
+import { api, Artist, SortOption } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import { Link } from 'react-router-dom';
+import SortBar from '../components/SortBar';
 
 export default function ArtistsPage() {
   const [artists, setArtists] = useState<Artist[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<SortOption>('name_asc');
   const [loading, setLoading] = useState(true);
   const limit = 50;
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.listArtists(page, limit);
+      const data = await api.listArtists(page, limit, sort);
       setArtists(data.items || []);
       setTotal(data.total);
     } catch (e) {
@@ -21,11 +23,16 @@ export default function ArtistsPage() {
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, [page, sort]);
 
   useEffect(() => { load(); }, [load]);
 
   const totalPages = Math.ceil(total / limit);
+
+  const handleSort = (s: SortOption) => {
+    setSort(s);
+    setPage(1);
+  };
 
   return (
     <div>
@@ -33,6 +40,8 @@ export default function ArtistsPage() {
         <h1>Artists</h1>
         <span className="count">{formatNumber(total)}</span>
       </div>
+
+      <SortBar value={sort} onChange={handleSort} />
 
       {loading ? (
         <div className="loading">Loading...</div>

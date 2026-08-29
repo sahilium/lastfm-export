@@ -1,19 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
-import { api, Track } from '../lib/api';
+import { api, Track, SortOption } from '../lib/api';
 import { formatNumber } from '../lib/format';
 import { Link } from 'react-router-dom';
+import SortBar from '../components/SortBar';
 
 export default function TracksPage() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [sort, setSort] = useState<SortOption>('name_asc');
   const [loading, setLoading] = useState(true);
   const limit = 50;
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await api.listTracks(page, limit);
+      const data = await api.listTracks(page, limit, sort);
       setTracks(data.items || []);
       setTotal(data.total);
     } catch (e) {
@@ -21,11 +23,16 @@ export default function TracksPage() {
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, [page, sort]);
 
   useEffect(() => { load(); }, [load]);
 
   const totalPages = Math.ceil(total / limit);
+
+  const handleSort = (s: SortOption) => {
+    setSort(s);
+    setPage(1);
+  };
 
   return (
     <div>
@@ -33,6 +40,8 @@ export default function TracksPage() {
         <h1>Tracks</h1>
         <span className="count">{formatNumber(total)}</span>
       </div>
+
+      <SortBar value={sort} onChange={handleSort} />
 
       {loading ? (
         <div className="loading">Loading...</div>

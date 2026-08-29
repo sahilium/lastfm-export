@@ -1,6 +1,7 @@
 version: "3"
 
 vars:
+  BIN_DIR: build
   BINARY: musiclib
   DB: musiclib.db
 
@@ -8,8 +9,9 @@ tasks:
   build:
     desc: Build the production binary (frontend + backend)
     cmds:
+      - mkdir -p {{.BIN_DIR}}
       - cd web && bun run build
-      - go build -o {{.BINARY}} ./cmd/musiclib
+      - go build -ldflags="-s -w" -trimpath -o {{.BIN_DIR}}/{{.BINARY}} ./cmd/musiclib
 
   build:frontend:
     desc: Build frontend assets only
@@ -19,24 +21,32 @@ tasks:
   build:backend:
     desc: Build backend binary only
     cmds:
-      - go build -o {{.BINARY}} ./cmd/musiclib
+      - mkdir -p {{.BIN_DIR}}
+      - go build -ldflags="-s -w" -trimpath -o {{.BIN_DIR}}/{{.BINARY}} ./cmd/musiclib
+
+  build:android:
+    desc: Build for Android ARM64
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - cd web && bun run build
+      - GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -trimpath -o {{.BIN_DIR}}/{{.BINARY}}-android-arm64 ./cmd/musiclib
 
   dev:
     desc: Start the server (rebuild before)
     deps: [build]
     cmds:
-      - ./{{.BINARY}} serve
+      - ./{{.BIN_DIR}}/{{.BINARY}} serve
 
   serve:
     desc: Run the server without rebuilding
     cmds:
-      - ./{{.BINARY}} serve
+      - ./{{.BIN_DIR}}/{{.BINARY}} serve
 
   import:
     desc: Import scrobbles from a source SQLite database
-    usage: task import -- nonominox.sqlite3
+    usage: task import -- db.db
     cmds:
-      - ./{{.BINARY}} import {{.CLI_ARGS}}
+      - ./{{.BIN_DIR}}/{{.BINARY}} import {{.CLI_ARGS}}
 
   test:
     desc: Run Go tests
@@ -56,23 +66,30 @@ tasks:
   stats:
     desc: Show library statistics
     cmds:
-      - ./{{.BINARY}} stats
+      - ./{{.BIN_DIR}}/{{.BINARY}} stats
 
   fts:
     desc: Rebuild full-text search indexes
     cmds:
-      - ./{{.BINARY}} fts
+      - ./{{.BIN_DIR}}/{{.BINARY}} fts
 
   migrate:
     desc: Run database migrations
     cmds:
-      - ./{{.BINARY}} migrate
+      - ./{{.BIN_DIR}}/{{.BINARY}} migrate
 
   clean:
     desc: Remove build artifacts
     cmds:
-      - rm -f {{.BINARY}}
+      - rm -rf {{.BIN_DIR}}
       - rm -rf web/dist
+
+  build:turso:
+    desc: Build with Turso/libsql support
+    cmds:
+      - mkdir -p {{.BIN_DIR}}
+      - cd web && bun run build
+      - go build -tags turso -ldflags="-s -w" -trimpath -o {{.BIN_DIR}}/{{.BINARY}}-turso ./cmd/musiclib
 
   frontend:dev:
     desc: Start frontend dev server with hot reload

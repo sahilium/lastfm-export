@@ -29,8 +29,8 @@ func NewService(db *sql.DB) *Service {
 	}
 }
 
-func (s *Service) ListArtists(ctx context.Context, page, limit int) ([]Artist, int, error) {
-	rows, total, err := s.artists.List(ctx, page, limit)
+func (s *Service) ListArtists(ctx context.Context, page, limit int, sort string) ([]Artist, int, error) {
+	rows, total, err := s.artists.List(ctx, page, limit, sort)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -78,8 +78,8 @@ func (s *Service) GetArtistTracks(ctx context.Context, artistID int64) ([]Track,
 	return tracks, nil
 }
 
-func (s *Service) ListAlbums(ctx context.Context, page, limit int) ([]Album, int, error) {
-	rows, total, err := s.albums.List(ctx, page, limit)
+func (s *Service) ListAlbums(ctx context.Context, page, limit int, sort string) ([]Album, int, error) {
+	rows, total, err := s.albums.List(ctx, page, limit, sort)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -115,8 +115,8 @@ func (s *Service) GetAlbumTracks(ctx context.Context, albumID int64) ([]Track, e
 	return tracks, nil
 }
 
-func (s *Service) ListTracks(ctx context.Context, page, limit int) ([]Track, int, error) {
-	rows, total, err := s.tracks.List(ctx, page, limit)
+func (s *Service) ListTracks(ctx context.Context, page, limit int, sort string) ([]Track, int, error) {
+	rows, total, err := s.tracks.List(ctx, page, limit, sort)
 	if err != nil {
 		return nil, 0, err
 	}

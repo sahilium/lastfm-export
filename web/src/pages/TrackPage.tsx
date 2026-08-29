@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api, Track, Scrobble, Tag } from '../lib/api';
 import { formatNumber, formatDateTime } from '../lib/format';
+import AddToCollectionButton from '../components/AddToCollectionButton';
 
 export default function TrackPage() {
   const { id } = useParams<{ id: string }>();
@@ -71,9 +72,12 @@ export default function TrackPage() {
             <div className="meta">MBID: {track.mbid}</div>
           )}
         </div>
-        <button className="btn" onClick={toggleFavorite}>
-          {track.favorite ? 'Unfavorite' : 'Favorite'}
-        </button>
+        <div className="detail-actions">
+          <button className="btn" onClick={toggleFavorite}>
+            {track.favorite ? 'Unfavorite' : 'Favorite'}
+          </button>
+          <AddToCollectionButton entityType="track" entityId={track.id} entityName={track.name} />
+        </div>
       </div>
 
       <div className="stats-row">

@@ -5,7 +5,7 @@
 *.sqlite3
 
 # Build output
-/out/
+/build/
 
 # Go
 *.test

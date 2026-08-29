@@ -32,7 +32,51 @@ func NewAlbumRepository(db *sql.DB) *AlbumRepository {
 	return &AlbumRepository{db: db}
 }
 
-func (r *AlbumRepository) List(ctx context.Context, page, limit int) ([]AlbumRow, int, error) {
+func albumSortClause(sort string) string {
+	switch sort {
+	case "name_desc":
+		return "al.name DESC"
+	case "scrobbles_desc":
+		return "COALESCE(s.scrobble_count, 0) DESC, al.name ASC"
+	case "scrobbles_asc":
+		return "COALESCE(s.scrobble_count, 0) ASC, al.name ASC"
+	case "recent_desc":
+		return "s.last_listened DESC NULLS LAST, al.name ASC"
+	case "recent_asc":
+		return "s.last_listened ASC NULLS FIRST, al.name ASC"
+	default:
+		return "al.name ASC"
+	}
+}
+
+const albumListQuery = `
+	SELECT
+		al.id, al.artist_id, al.name, al.mbid, al.release_date,
+		al.note, al.favorite, al.created_at, al.updated_at,
+		a.name,
+		COALESCE(s.scrobble_count, 0),
+		COALESCE(t.track_count, 0),
+		s.first_listened,
+		s.last_listened
+	FROM albums al
+	JOIN artists a ON a.id = al.artist_id
+	LEFT JOIN (
+		SELECT sc.album, sc.artist, COUNT(*) as scrobble_count,
+			MIN(sc.timestamp) as first_listened,
+			MAX(sc.timestamp) as last_listened
+		FROM scrobbles sc
+		WHERE sc.album IS NOT NULL AND sc.album != ''
+		GROUP BY sc.artist, sc.album
+	) s ON s.artist = a.name AND s.album = al.name
+	LEFT JOIN (
+		SELECT album_id, COUNT(*) as track_count
+		FROM tracks
+		WHERE album_id IS NOT NULL
+		GROUP BY album_id
+	) t ON t.album_id = al.id
+`
+
+func (r *AlbumRepository) List(ctx context.Context, page, limit int, sort string) ([]AlbumRow, int, error) {
 	offset := (page - 1) * limit
 
 	var total int
@@ -41,34 +85,8 @@ func (r *AlbumRepository) List(ctx context.Context, page, limit int) ([]AlbumRow
 		return nil, 0, fmt.Errorf("count albums: %w", err)
 	}
 
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT
-			al.id, al.artist_id, al.name, al.mbid, al.release_date,
-			al.note, al.favorite, al.created_at, al.updated_at,
-			a.name,
-			COALESCE(s.scrobble_count, 0),
-			COALESCE(t.track_count, 0),
-			s.first_listened,
-			s.last_listened
-		FROM albums al
-		JOIN artists a ON a.id = al.artist_id
-		LEFT JOIN (
-			SELECT sc.album, sc.artist, COUNT(*) as scrobble_count,
-				MIN(sc.timestamp) as first_listened,
-				MAX(sc.timestamp) as last_listened
-			FROM scrobbles sc
-			WHERE sc.album IS NOT NULL AND sc.album != ''
-			GROUP BY sc.artist, sc.album
-		) s ON s.artist = a.name AND s.album = al.name
-		LEFT JOIN (
-			SELECT album_id, COUNT(*) as track_count
-			FROM tracks
-			WHERE album_id IS NOT NULL
-			GROUP BY album_id
-		) t ON t.album_id = al.id
-		ORDER BY al.name ASC
-		LIMIT ? OFFSET ?
-	`, limit, offset)
+	query := albumListQuery + ` ORDER BY ` + albumSortClause(sort) + ` LIMIT ? OFFSET ?`
+	rows, err := r.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list albums: %w", err)
 	}
@@ -93,33 +111,7 @@ func (r *AlbumRepository) List(ctx context.Context, page, limit int) ([]AlbumRow
 
 func (r *AlbumRepository) GetByID(ctx context.Context, id int64) (*AlbumRow, error) {
 	var al AlbumRow
-	err := r.db.QueryRowContext(ctx, `
-		SELECT
-			al.id, al.artist_id, al.name, al.mbid, al.release_date,
-			al.note, al.favorite, al.created_at, al.updated_at,
-			a.name,
-			COALESCE(s.scrobble_count, 0),
-			COALESCE(t.track_count, 0),
-			s.first_listened,
-			s.last_listened
-		FROM albums al
-		JOIN artists a ON a.id = al.artist_id
-		LEFT JOIN (
-			SELECT sc.album, sc.artist, COUNT(*) as scrobble_count,
-				MIN(sc.timestamp) as first_listened,
-				MAX(sc.timestamp) as last_listened
-			FROM scrobbles sc
-			WHERE sc.album IS NOT NULL AND sc.album != ''
-			GROUP BY sc.artist, sc.album
-		) s ON s.artist = a.name AND s.album = al.name
-		LEFT JOIN (
-			SELECT album_id, COUNT(*) as track_count
-			FROM tracks
-			WHERE album_id IS NOT NULL
-			GROUP BY album_id
-		) t ON t.album_id = al.id
-		WHERE al.id = ?
-	`, id).Scan(
+	err := r.db.QueryRowContext(ctx, albumListQuery+` WHERE al.id = ?`, id).Scan(
 		&al.ID, &al.ArtistID, &al.Name, &al.MBID, &al.ReleaseDate,
 		&al.Note, &al.Favorite, &al.CreatedAt, &al.UpdatedAt,
 		&al.ArtistName, &al.ScrobbleCount, &al.TrackCount,
@@ -159,12 +151,12 @@ func (r *AlbumRepository) FindOrCreate(ctx context.Context, artistID int64, name
 
 func (r *AlbumRepository) Update(ctx context.Context, id int64, note *string, favorite *bool) error {
 	if note != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE albums SET note = ?, updated_at = ? WHERE id = ?`, *note, nowUnix(), id); err != nil {
+		if _, err := r.db.ExecContext(ctx, `UPDATE albums SET note = ?, updated_at = ? WHERE id = ?`, *note, time.Now().Unix(), id); err != nil {
 			return fmt.Errorf("update album note: %w", err)
 		}
 	}
 	if favorite != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE albums SET favorite = ?, updated_at = ? WHERE id = ?`, *favorite, nowUnix(), id); err != nil {
+		if _, err := r.db.ExecContext(ctx, `UPDATE albums SET favorite = ?, updated_at = ? WHERE id = ?`, *favorite, time.Now().Unix(), id); err != nil {
 			return fmt.Errorf("update album favorite: %w", err)
 		}
 	}
@@ -174,9 +166,29 @@ func (r *AlbumRepository) Update(ctx context.Context, id int64, note *string, fa
 func (r *AlbumRepository) Search(ctx context.Context, query string, limit int) ([]AlbumRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT al.id, al.artist_id, al.name, al.mbid, al.release_date,
-			al.note, al.favorite, al.created_at, al.updated_at
+			al.note, al.favorite, al.created_at, al.updated_at,
+			a.name,
+			COALESCE(s.scrobble_count, 0),
+			COALESCE(t.track_count, 0),
+			s.first_listened,
+			s.last_listened
 		FROM albums al
+		JOIN artists a ON a.id = al.artist_id
 		JOIN albums_fts fts ON fts.rowid = al.id
+		LEFT JOIN (
+			SELECT sc.album, sc.artist, COUNT(*) as scrobble_count,
+				MIN(sc.timestamp) as first_listened,
+				MAX(sc.timestamp) as last_listened
+			FROM scrobbles sc
+			WHERE sc.album IS NOT NULL AND sc.album != ''
+			GROUP BY sc.artist, sc.album
+		) s ON s.artist = a.name AND s.album = al.name
+		LEFT JOIN (
+			SELECT album_id, COUNT(*) as track_count
+			FROM tracks
+			WHERE album_id IS NOT NULL
+			GROUP BY album_id
+		) t ON t.album_id = al.id
 		WHERE albums_fts MATCH ?
 		ORDER BY rank
 		LIMIT ?
@@ -190,7 +202,9 @@ func (r *AlbumRepository) Search(ctx context.Context, query string, limit int) (
 	for rows.Next() {
 		var al AlbumRow
 		if err := rows.Scan(&al.ID, &al.ArtistID, &al.Name, &al.MBID, &al.ReleaseDate,
-			&al.Note, &al.Favorite, &al.CreatedAt, &al.UpdatedAt); err != nil {
+			&al.Note, &al.Favorite, &al.CreatedAt, &al.UpdatedAt,
+			&al.ArtistName, &al.ScrobbleCount, &al.TrackCount,
+			&al.FirstListened, &al.LastListened); err != nil {
 			return nil, fmt.Errorf("scan album: %w", err)
 		}
 		albums = append(albums, al)
@@ -247,8 +261,4 @@ func (r *AlbumRepository) SyncFTS(ctx context.Context) error {
 		INSERT INTO albums_fts(albums_fts) VALUES('rebuild')
 	`)
 	return err
-}
-
-func nowUnix() int64 {
-	return time.Now().Unix()
 }

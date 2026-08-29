@@ -163,6 +163,37 @@ func All() []Migration {
 				);
 			`,
 		},
+		{
+			Version: 9,
+			Name:    "create_collections",
+			SQL: `
+				CREATE TABLE IF NOT EXISTS collections (
+					id INTEGER PRIMARY KEY,
+					parent_id INTEGER,
+					name TEXT NOT NULL,
+					description TEXT NOT NULL DEFAULT '',
+					created_at INTEGER NOT NULL,
+					updated_at INTEGER NOT NULL,
+					FOREIGN KEY (parent_id) REFERENCES collections(id) ON DELETE CASCADE
+				);
+				CREATE INDEX IF NOT EXISTS idx_collections_parent ON collections(parent_id);
+
+				CREATE TABLE IF NOT EXISTS collection_items (
+					id INTEGER PRIMARY KEY,
+					collection_id INTEGER NOT NULL,
+					item_type TEXT NOT NULL,
+					item_id INTEGER NOT NULL,
+					position INTEGER NOT NULL DEFAULT 0,
+					note TEXT NOT NULL DEFAULT '',
+					created_at INTEGER NOT NULL,
+					FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
+					CHECK (item_type IN ('artist', 'album', 'track', 'collection'))
+				);
+				CREATE INDEX IF NOT EXISTS idx_collection_items_collection ON collection_items(collection_id);
+				CREATE INDEX IF NOT EXISTS idx_collection_items_position ON collection_items(collection_id, position);
+				CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_items_unique ON collection_items(collection_id, item_type, item_id);
+			`,
+		},
 	}
 }
 

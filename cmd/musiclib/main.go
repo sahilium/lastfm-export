@@ -11,8 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/musiclib/internal/api"
 	"github.com/musiclib/internal/config"
+	"github.com/musiclib/internal/curation"
 	"github.com/musiclib/internal/db"
 	"github.com/musiclib/internal/db/migrations"
+	"github.com/musiclib/internal/db/repositories"
 	"github.com/musiclib/internal/library"
 	"github.com/musiclib/web"
 )
@@ -68,8 +70,11 @@ func serve() {
 
 	svc := library.NewService(database)
 
+	collectionRepo := repositories.NewCollectionRepository(database)
+	curationSvc := curation.NewService(collectionRepo)
+
 	lastfmHandler := api.NewLastfmSyncHandler(database, cfg.LastfmAPIKey, cfg.LastfmUsername)
-	router := api.NewRouter(svc, lastfmHandler)
+	router := api.NewRouter(svc, curationSvc, lastfmHandler)
 
 	// Serve embedded frontend
 	embedFrontend(router)

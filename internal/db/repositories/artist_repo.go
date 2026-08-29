@@ -30,7 +30,53 @@ func NewArtistRepository(db *sql.DB) *ArtistRepository {
 	return &ArtistRepository{db: db}
 }
 
-func (r *ArtistRepository) List(ctx context.Context, page, limit int) ([]ArtistRow, int, error) {
+func artistSortClause(sort string) string {
+	switch sort {
+	case "name_desc":
+		return "a.name DESC"
+	case "scrobbles_desc":
+		return "COALESCE(s.scrobble_count, 0) DESC, a.name ASC"
+	case "scrobbles_asc":
+		return "COALESCE(s.scrobble_count, 0) ASC, a.name ASC"
+	case "recent_desc":
+		return "s.last_listened DESC NULLS LAST, a.name ASC"
+	case "recent_asc":
+		return "s.last_listened ASC NULLS FIRST, a.name ASC"
+	default:
+		return "a.name ASC"
+	}
+}
+
+const artistListQuery = `
+	SELECT
+		a.id, a.name, a.mbid, a.note, a.favorite,
+		a.created_at, a.updated_at,
+		COALESCE(s.scrobble_count, 0),
+		COALESCE(al.album_count, 0),
+		COALESCE(t.track_count, 0),
+		s.first_listened,
+		s.last_listened
+	FROM artists a
+	LEFT JOIN (
+		SELECT artist, COUNT(*) as scrobble_count,
+			MIN(timestamp) as first_listened,
+			MAX(timestamp) as last_listened
+		FROM scrobbles
+		GROUP BY artist
+	) s ON s.artist = a.name
+	LEFT JOIN (
+		SELECT artist_id, COUNT(*) as album_count
+		FROM albums
+		GROUP BY artist_id
+	) al ON al.artist_id = a.id
+	LEFT JOIN (
+		SELECT artist_id, COUNT(*) as track_count
+		FROM tracks
+		GROUP BY artist_id
+	) t ON t.artist_id = a.id
+`
+
+func (r *ArtistRepository) List(ctx context.Context, page, limit int, sort string) ([]ArtistRow, int, error) {
 	offset := (page - 1) * limit
 
 	var total int
@@ -39,36 +85,8 @@ func (r *ArtistRepository) List(ctx context.Context, page, limit int) ([]ArtistR
 		return nil, 0, fmt.Errorf("count artists: %w", err)
 	}
 
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT
-			a.id, a.name, a.mbid, a.note, a.favorite,
-			a.created_at, a.updated_at,
-			COALESCE(s.scrobble_count, 0),
-			COALESCE(al.album_count, 0),
-			COALESCE(t.track_count, 0),
-			s.first_listened,
-			s.last_listened
-		FROM artists a
-		LEFT JOIN (
-			SELECT artist, COUNT(*) as scrobble_count,
-				MIN(timestamp) as first_listened,
-				MAX(timestamp) as last_listened
-			FROM scrobbles
-			GROUP BY artist
-		) s ON s.artist = a.name
-		LEFT JOIN (
-			SELECT artist_id, COUNT(*) as album_count
-			FROM albums
-			GROUP BY artist_id
-		) al ON al.artist_id = a.id
-		LEFT JOIN (
-			SELECT artist_id, COUNT(*) as track_count
-			FROM tracks
-			GROUP BY artist_id
-		) t ON t.artist_id = a.id
-		ORDER BY a.name ASC
-		LIMIT ? OFFSET ?
-	`, limit, offset)
+	query := artistListQuery + ` ORDER BY ` + artistSortClause(sort) + ` LIMIT ? OFFSET ?`
+	rows, err := r.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list artists: %w", err)
 	}
@@ -94,35 +112,7 @@ func (r *ArtistRepository) List(ctx context.Context, page, limit int) ([]ArtistR
 
 func (r *ArtistRepository) GetByID(ctx context.Context, id int64) (*ArtistRow, error) {
 	var a ArtistRow
-	err := r.db.QueryRowContext(ctx, `
-		SELECT
-			a.id, a.name, a.mbid, a.note, a.favorite,
-			a.created_at, a.updated_at,
-			COALESCE(s.scrobble_count, 0),
-			COALESCE(al.album_count, 0),
-			COALESCE(t.track_count, 0),
-			s.first_listened,
-			s.last_listened
-		FROM artists a
-		LEFT JOIN (
-			SELECT artist, COUNT(*) as scrobble_count,
-				MIN(timestamp) as first_listened,
-				MAX(timestamp) as last_listened
-			FROM scrobbles
-			GROUP BY artist
-		) s ON s.artist = a.name
-		LEFT JOIN (
-			SELECT artist_id, COUNT(*) as album_count
-			FROM albums
-			GROUP BY artist_id
-		) al ON al.artist_id = a.id
-		LEFT JOIN (
-			SELECT artist_id, COUNT(*) as track_count
-			FROM tracks
-			GROUP BY artist_id
-		) t ON t.artist_id = a.id
-		WHERE a.id = ?
-	`, id).Scan(
+	err := r.db.QueryRowContext(ctx, artistListQuery+` WHERE a.id = ?`, id).Scan(
 		&a.ID, &a.Name, &a.MBID, &a.Note, &a.Favorite,
 		&a.CreatedAt, &a.UpdatedAt,
 		&a.ScrobbleCount, &a.AlbumCount, &a.TrackCount,
@@ -188,9 +178,15 @@ func (r *ArtistRepository) Update(ctx context.Context, id int64, note *string, f
 
 func (r *ArtistRepository) Search(ctx context.Context, query string, limit int) ([]ArtistRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.id, a.name, a.mbid, a.note, a.favorite, a.created_at, a.updated_at
+		SELECT a.id, a.name, a.mbid, a.note, a.favorite, a.created_at, a.updated_at,
+			COALESCE(s.scrobble_count, 0)
 		FROM artists a
 		JOIN artists_fts fts ON fts.rowid = a.id
+		LEFT JOIN (
+			SELECT artist, COUNT(*) as scrobble_count
+			FROM scrobbles
+			GROUP BY artist
+		) s ON s.artist = a.name
 		WHERE artists_fts MATCH ?
 		ORDER BY rank
 		LIMIT ?
@@ -203,7 +199,7 @@ func (r *ArtistRepository) Search(ctx context.Context, query string, limit int) 
 	var artists []ArtistRow
 	for rows.Next() {
 		var a ArtistRow
-		if err := rows.Scan(&a.ID, &a.Name, &a.MBID, &a.Note, &a.Favorite, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.MBID, &a.Note, &a.Favorite, &a.CreatedAt, &a.UpdatedAt, &a.ScrobbleCount); err != nil {
 			return nil, fmt.Errorf("scan artist: %w", err)
 		}
 		artists = append(artists, a)

@@ -32,7 +32,45 @@ func NewTrackRepository(db *sql.DB) *TrackRepository {
 	return &TrackRepository{db: db}
 }
 
-func (r *TrackRepository) List(ctx context.Context, page, limit int) ([]TrackRow, int, error) {
+func trackSortClause(sort string) string {
+	switch sort {
+	case "name_desc":
+		return "t.name DESC"
+	case "scrobbles_desc":
+		return "COALESCE(s.scrobble_count, 0) DESC, t.name ASC"
+	case "scrobbles_asc":
+		return "COALESCE(s.scrobble_count, 0) ASC, t.name ASC"
+	case "recent_desc":
+		return "s.last_listened DESC NULLS LAST, t.name ASC"
+	case "recent_asc":
+		return "s.last_listened ASC NULLS FIRST, t.name ASC"
+	default:
+		return "t.name ASC"
+	}
+}
+
+const trackListQuery = `
+	SELECT
+		t.id, t.artist_id, t.album_id, t.name, t.mbid,
+		t.note, t.favorite, t.created_at, t.updated_at,
+		a.name,
+		al.name,
+		COALESCE(s.scrobble_count, 0),
+		s.first_listened,
+		s.last_listened
+	FROM tracks t
+	JOIN artists a ON a.id = t.artist_id
+	LEFT JOIN albums al ON al.id = t.album_id
+	LEFT JOIN (
+		SELECT sc.track, sc.artist, COUNT(*) as scrobble_count,
+			MIN(sc.timestamp) as first_listened,
+			MAX(sc.timestamp) as last_listened
+		FROM scrobbles sc
+		GROUP BY sc.artist, sc.track
+	) s ON s.artist = a.name AND s.track = t.name
+`
+
+func (r *TrackRepository) List(ctx context.Context, page, limit int, sort string) ([]TrackRow, int, error) {
 	offset := (page - 1) * limit
 
 	var total int
@@ -41,28 +79,8 @@ func (r *TrackRepository) List(ctx context.Context, page, limit int) ([]TrackRow
 		return nil, 0, fmt.Errorf("count tracks: %w", err)
 	}
 
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT
-			t.id, t.artist_id, t.album_id, t.name, t.mbid,
-			t.note, t.favorite, t.created_at, t.updated_at,
-			a.name,
-			al.name,
-			COALESCE(s.scrobble_count, 0),
-			s.first_listened,
-			s.last_listened
-		FROM tracks t
-		JOIN artists a ON a.id = t.artist_id
-		LEFT JOIN albums al ON al.id = t.album_id
-		LEFT JOIN (
-			SELECT sc.track, sc.artist, COUNT(*) as scrobble_count,
-				MIN(sc.timestamp) as first_listened,
-				MAX(sc.timestamp) as last_listened
-			FROM scrobbles sc
-			GROUP BY sc.artist, sc.track
-		) s ON s.artist = a.name AND s.track = t.name
-		ORDER BY t.name ASC
-		LIMIT ? OFFSET ?
-	`, limit, offset)
+	query := trackListQuery + ` ORDER BY ` + trackSortClause(sort) + ` LIMIT ? OFFSET ?`
+	rows, err := r.db.QueryContext(ctx, query, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list tracks: %w", err)
 	}
@@ -87,27 +105,7 @@ func (r *TrackRepository) List(ctx context.Context, page, limit int) ([]TrackRow
 
 func (r *TrackRepository) GetByID(ctx context.Context, id int64) (*TrackRow, error) {
 	var tr TrackRow
-	err := r.db.QueryRowContext(ctx, `
-		SELECT
-			t.id, t.artist_id, t.album_id, t.name, t.mbid,
-			t.note, t.favorite, t.created_at, t.updated_at,
-			a.name,
-			al.name,
-			COALESCE(s.scrobble_count, 0),
-			s.first_listened,
-			s.last_listened
-		FROM tracks t
-		JOIN artists a ON a.id = t.artist_id
-		LEFT JOIN albums al ON al.id = t.album_id
-		LEFT JOIN (
-			SELECT sc.track, sc.artist, COUNT(*) as scrobble_count,
-				MIN(sc.timestamp) as first_listened,
-				MAX(sc.timestamp) as last_listened
-			FROM scrobbles sc
-			GROUP BY sc.artist, sc.track
-		) s ON s.artist = a.name AND s.track = t.name
-		WHERE t.id = ?
-	`, id).Scan(
+	err := r.db.QueryRowContext(ctx, trackListQuery+` WHERE t.id = ?`, id).Scan(
 		&tr.ID, &tr.ArtistID, &tr.AlbumID, &tr.Name, &tr.MBID,
 		&tr.Note, &tr.Favorite, &tr.CreatedAt, &tr.UpdatedAt,
 		&tr.ArtistName, &tr.AlbumName,
@@ -153,12 +151,12 @@ func (r *TrackRepository) FindOrCreate(ctx context.Context, artistID int64, albu
 
 func (r *TrackRepository) Update(ctx context.Context, id int64, note *string, favorite *bool) error {
 	if note != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE tracks SET note = ?, updated_at = ? WHERE id = ?`, *note, nowUnixTrack(), id); err != nil {
+		if _, err := r.db.ExecContext(ctx, `UPDATE tracks SET note = ?, updated_at = ? WHERE id = ?`, *note, time.Now().Unix(), id); err != nil {
 			return fmt.Errorf("update track note: %w", err)
 		}
 	}
 	if favorite != nil {
-		if _, err := r.db.ExecContext(ctx, `UPDATE tracks SET favorite = ?, updated_at = ? WHERE id = ?`, *favorite, nowUnixTrack(), id); err != nil {
+		if _, err := r.db.ExecContext(ctx, `UPDATE tracks SET favorite = ?, updated_at = ? WHERE id = ?`, *favorite, time.Now().Unix(), id); err != nil {
 			return fmt.Errorf("update track favorite: %w", err)
 		}
 	}
@@ -168,9 +166,23 @@ func (r *TrackRepository) Update(ctx context.Context, id int64, note *string, fa
 func (r *TrackRepository) Search(ctx context.Context, query string, limit int) ([]TrackRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT t.id, t.artist_id, t.album_id, t.name, t.mbid,
-			t.note, t.favorite, t.created_at, t.updated_at
+			t.note, t.favorite, t.created_at, t.updated_at,
+			a.name,
+			al.name,
+			COALESCE(s.scrobble_count, 0),
+			s.first_listened,
+			s.last_listened
 		FROM tracks t
+		JOIN artists a ON a.id = t.artist_id
+		LEFT JOIN albums al ON al.id = t.album_id
 		JOIN tracks_fts fts ON fts.rowid = t.id
+		LEFT JOIN (
+			SELECT sc.track, sc.artist, COUNT(*) as scrobble_count,
+				MIN(sc.timestamp) as first_listened,
+				MAX(sc.timestamp) as last_listened
+			FROM scrobbles sc
+			GROUP BY sc.artist, sc.track
+		) s ON s.artist = a.name AND s.track = t.name
 		WHERE tracks_fts MATCH ?
 		ORDER BY rank
 		LIMIT ?
@@ -184,7 +196,9 @@ func (r *TrackRepository) Search(ctx context.Context, query string, limit int) (
 	for rows.Next() {
 		var tr TrackRow
 		if err := rows.Scan(&tr.ID, &tr.ArtistID, &tr.AlbumID, &tr.Name, &tr.MBID,
-			&tr.Note, &tr.Favorite, &tr.CreatedAt, &tr.UpdatedAt); err != nil {
+			&tr.Note, &tr.Favorite, &tr.CreatedAt, &tr.UpdatedAt,
+			&tr.ArtistName, &tr.AlbumName,
+			&tr.ScrobbleCount, &tr.FirstListened, &tr.LastListened); err != nil {
 			return nil, fmt.Errorf("scan track: %w", err)
 		}
 		tracks = append(tracks, tr)
@@ -224,8 +238,4 @@ func (r *TrackRepository) SyncFTS(ctx context.Context) error {
 		INSERT INTO tracks_fts(tracks_fts) VALUES('rebuild')
 	`)
 	return err
-}
-
-func nowUnixTrack() int64 {
-	return time.Now().Unix()
 }

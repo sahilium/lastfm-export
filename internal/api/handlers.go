@@ -19,8 +19,9 @@ func NewHandler(svc *library.Service) *Handler {
 
 func (h *Handler) ListArtists(c *gin.Context) {
 	page, limit := parsePagination(c)
+	sort := parseSort(c)
 
-	artists, total, err := h.svc.ListArtists(c.Request.Context(), page, limit)
+	artists, total, err := h.svc.ListArtists(c.Request.Context(), page, limit, sort)
 	if err != nil {
 		slog.Error("list artists", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list artists"})
@@ -109,8 +110,9 @@ func (h *Handler) GetArtistTracks(c *gin.Context) {
 
 func (h *Handler) ListAlbums(c *gin.Context) {
 	page, limit := parsePagination(c)
+	sort := parseSort(c)
 
-	albums, total, err := h.svc.ListAlbums(c.Request.Context(), page, limit)
+	albums, total, err := h.svc.ListAlbums(c.Request.Context(), page, limit, sort)
 	if err != nil {
 		slog.Error("list albums", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list albums"})
@@ -183,8 +185,9 @@ func (h *Handler) GetAlbumTracks(c *gin.Context) {
 
 func (h *Handler) ListTracks(c *gin.Context) {
 	page, limit := parsePagination(c)
+	sort := parseSort(c)
 
-	tracks, total, err := h.svc.ListTracks(c.Request.Context(), page, limit)
+	tracks, total, err := h.svc.ListTracks(c.Request.Context(), page, limit, sort)
 	if err != nil {
 		slog.Error("list tracks", "err", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list tracks"})
@@ -387,4 +390,18 @@ func parsePagination(c *gin.Context) (int, int) {
 	}
 
 	return page, limit
+}
+
+var validSorts = map[string]bool{
+	"name_asc": true, "name_desc": true,
+	"scrobbles_asc": true, "scrobbles_desc": true,
+	"recent_asc": true, "recent_desc": true,
+}
+
+func parseSort(c *gin.Context) string {
+	sort := c.DefaultQuery("sort", "name_asc")
+	if !validSorts[sort] {
+		return "name_asc"
+	}
+	return sort
 }

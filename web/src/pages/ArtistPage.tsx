@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { api, Artist, Album, Track, Tag } from '../lib/api';
 import { formatNumber, formatDate } from '../lib/format';
+import AddToCollectionButton from '../components/AddToCollectionButton';
 
 export default function ArtistPage() {
   const { id } = useParams<{ id: string }>();
@@ -66,9 +67,12 @@ export default function ArtistPage() {
             <div className="meta">MBID: {artist.mbid}</div>
           )}
         </div>
-        <button className="btn" onClick={toggleFavorite}>
-          {artist.favorite ? 'Unfavorite' : 'Favorite'}
-        </button>
+        <div className="detail-actions">
+          <button className="btn" onClick={toggleFavorite}>
+            {artist.favorite ? 'Unfavorite' : 'Favorite'}
+          </button>
+          <AddToCollectionButton entityType="artist" entityId={artist.id} entityName={artist.name} />
+        </div>
       </div>
 
       <div className="stats-row">

@@ -5,9 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-
-	_ "github.com/tursodatabase/go-libsql"
-	_ "modernc.org/sqlite"
 )
 
 type Options struct {
