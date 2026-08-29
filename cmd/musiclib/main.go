@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"flag"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -9,6 +11,7 @@ import (
 	"os"
 
 	"github.com/gin-gonic/gin"
+	"github.com/joho/godotenv"
 	"github.com/musiclib/internal/api"
 	"github.com/musiclib/internal/config"
 	"github.com/musiclib/internal/curation"
@@ -19,15 +22,24 @@ import (
 	"github.com/musiclib/web"
 )
 
+const settingsDBPath = "musiclib-settings.db"
+
 func main() {
+	_ = godotenv.Load()
+
 	if len(os.Args) < 2 {
-		serve()
+		serveCmd(false, "")
 		return
 	}
 
-	switch os.Args[1] {
+	cmd := os.Args[1]
+
+	switch cmd {
 	case "serve":
-		serve()
+		fs := flag.NewFlagSet("serve", flag.ExitOnError)
+		dbPath := fs.String("db", "", "path to local SQLite database")
+		_ = fs.Parse(os.Args[2:])
+		serveCmd(*dbPath != "", *dbPath)
 	case "migrate":
 		runMigrate()
 	case "import":
@@ -41,42 +53,79 @@ func main() {
 	case "fts":
 		runFTSRebuild()
 	default:
-		fmt.Fprintf(os.Stderr, "usage: musiclib [serve|migrate|import <source>|stats|fts]\n")
+		fmt.Fprintf(os.Stderr, "usage: musiclib [serve [--db <path>]|migrate|import <source>|stats|fts]\n")
 		os.Exit(1)
 	}
 }
 
-func serve() {
+func serveCmd(localMode bool, localDBPath string) {
 	cfg := config.Load()
 	setupLogging()
 
 	slog.Info("starting musiclib", "address", cfg.ServerAddress)
 
-	database, err := db.Open(db.Options{
-		DatabasePath: cfg.DatabasePath,
-		TursoURL:     cfg.TursoURL,
-		TursoToken:   cfg.TursoAuthToken,
-	})
+	settingsDB, err := db.Open(db.Options{DatabasePath: settingsDBPath})
 	if err != nil {
-		slog.Error("failed to open database", "err", err)
+		slog.Error("failed to open settings database", "err", err)
 		os.Exit(1)
 	}
-	defer database.Close()
+	defer settingsDB.Close()
 
-	if err := migrations.Run(database); err != nil {
-		slog.Error("failed to run migrations", "err", err)
+	if err := migrations.Run(settingsDB); err != nil {
+		slog.Error("failed to run settings migrations", "err", err)
 		os.Exit(1)
 	}
 
-	svc := library.NewService(database)
+	settingsRepo := repositories.NewSettingsRepository(settingsDB)
 
-	collectionRepo := repositories.NewCollectionRepository(database)
-	curationSvc := curation.NewService(collectionRepo)
+	var dataDB *sql.DB
 
-	lastfmHandler := api.NewLastfmSyncHandler(database, cfg.LastfmAPIKey, cfg.LastfmUsername)
-	router := api.NewRouter(svc, curationSvc, lastfmHandler)
+	if localMode {
+		slog.Info("local mode", "path", localDBPath)
+		w, err := db.Open(db.Options{DatabasePath: localDBPath})
+		if err != nil {
+			slog.Error("failed to open local database", "err", err)
+			os.Exit(1)
+		}
+		defer w.Close()
+		dataDB = w
+	} else {
+		tursoURL, _ := settingsRepo.Get(context.Background(), "turso_url")
+		tursoToken, _ := settingsRepo.Get(context.Background(), "turso_token")
 
-	// Serve embedded frontend
+		if tursoURL == "" {
+			slog.Warn("no turso configured — server started but data features unavailable. configure turso in /settings and restart.")
+			dataDB = nil
+		} else {
+			slog.Info("connecting to turso")
+			w, err := db.Open(db.Options{TursoURL: tursoURL, TursoToken: tursoToken})
+			if err != nil {
+				slog.Error("failed to connect to turso", "err", err)
+				dataDB = nil
+			} else {
+				defer w.Close()
+				if err := migrations.Run(w); err != nil {
+					slog.Error("failed to run turso migrations", "err", err)
+					dataDB = nil
+				} else {
+					dataDB = w
+				}
+			}
+		}
+	}
+
+	var svc *library.Service
+	var curationSvc *curation.Service
+	var lastfmHandler *api.LastfmSyncHandler
+
+	if dataDB != nil {
+		svc = library.NewService(dataDB)
+		collectionRepo := repositories.NewCollectionRepository(dataDB)
+		curationSvc = curation.NewService(collectionRepo)
+		lastfmHandler = api.NewLastfmSyncHandler(dataDB, cfg.LastfmAPIKey, cfg.LastfmUsername)
+	}
+
+	router := api.NewRouter(svc, curationSvc, settingsRepo, lastfmHandler, dataDB != nil)
 	embedFrontend(router)
 
 	slog.Info("server starting", "address", cfg.ServerAddress)
@@ -104,7 +153,6 @@ func embedFrontend(r *gin.Engine) {
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 
-		// Try to serve the static file directly
 		if path != "/" && path != "" {
 			cleaned := path[1:]
 			if f, err := subFS.(fs.ReadFileFS).Open(cleaned); err == nil {
@@ -114,7 +162,6 @@ func embedFrontend(r *gin.Engine) {
 			}
 		}
 
-		// SPA fallback: serve index.html
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
 
@@ -122,14 +169,9 @@ func embedFrontend(r *gin.Engine) {
 }
 
 func runMigrate() {
-	cfg := config.Load()
 	setupLogging()
 
-	database, err := db.Open(db.Options{
-		DatabasePath: cfg.DatabasePath,
-		TursoURL:     cfg.TursoURL,
-		TursoToken:   cfg.TursoAuthToken,
-	})
+	database, err := db.Open(db.Options{DatabasePath: "musiclib.db"})
 	if err != nil {
 		slog.Error("failed to open database", "err", err)
 		os.Exit(1)
@@ -145,14 +187,9 @@ func runMigrate() {
 }
 
 func runStats() {
-	cfg := config.Load()
 	setupLogging()
 
-	database, err := db.Open(db.Options{
-		DatabasePath: cfg.DatabasePath,
-		TursoURL:     cfg.TursoURL,
-		TursoToken:   cfg.TursoAuthToken,
-	})
+	database, err := db.Open(db.Options{DatabasePath: "musiclib.db"})
 	if err != nil {
 		slog.Error("failed to open database", "err", err)
 		os.Exit(1)
@@ -174,14 +211,9 @@ func runStats() {
 }
 
 func runFTSRebuild() {
-	cfg := config.Load()
 	setupLogging()
 
-	database, err := db.Open(db.Options{
-		DatabasePath: cfg.DatabasePath,
-		TursoURL:     cfg.TursoURL,
-		TursoToken:   cfg.TursoAuthToken,
-	})
+	database, err := db.Open(db.Options{DatabasePath: "musiclib.db"})
 	if err != nil {
 		slog.Error("failed to open database", "err", err)
 		os.Exit(1)

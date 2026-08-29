@@ -194,6 +194,16 @@ func All() []Migration {
 				CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_items_unique ON collection_items(collection_id, item_type, item_id);
 			`,
 		},
+		{
+			Version: 10,
+			Name:    "create_settings",
+			SQL: `
+				CREATE TABLE IF NOT EXISTS settings (
+					key TEXT PRIMARY KEY,
+					value TEXT NOT NULL
+				);
+			`,
+		},
 	}
 }
 
